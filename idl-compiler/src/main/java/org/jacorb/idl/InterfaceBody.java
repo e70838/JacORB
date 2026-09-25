@@ -40,10 +40,9 @@ public class InterfaceBody
     public Interface my_interface;
     SymbolList inheritance_spec = null;
     private Operation[] methods = null;
-    private String waitingName = "";
 
-    /** list of parse threads created and either active or still blocked */
-    private static Vector<ParseThread> parseThreads = new Vector<ParseThread>();
+    /** number of forward declared ancestors that must be defined before this body can be parsed */
+    private int pendingAncestors = 0;
 
 
     public InterfaceBody( int num )
@@ -106,8 +105,6 @@ public class InterfaceBody
 
         if( inheritance_spec != null )
         {
-            Object o = null;
-            boolean pending = false;
             for( Enumeration e = inheritance_spec.v.elements();
                  e.hasMoreElements(); )
             {
@@ -116,14 +113,18 @@ public class InterfaceBody
                 if( parser.logger.isLoggable(Level.ALL) )
                     parser.logger.log(Level.ALL, "Trying to resolve " + scoped_name);
 
-
-                o = parser.get_pending( scoped_name.resolvedName() );
-                pending = pending || ( o != null );
+                String ancestor = scoped_name.resolvedName();
+                if( parser.get_pending( ancestor ) != null )
+                {
+                    pendingAncestors++;
+                    parser.defer_parse( ancestor, this );
+                }
             }
-            if( pending )
+            if( pendingAncestors > 0 )
             {
-                parser.set_pending( full_name(), o );
-                new ParseThread( this );
+                // this interface stays pending until its body is parsed,
+                // which happens once all its pending ancestors are defined
+                parser.set_pending( full_name(), my_interface );
             }
             else
             {
@@ -137,6 +138,22 @@ public class InterfaceBody
             parser.remove_pending( full_name() );
             if( parser.logger.isLoggable(Level.ALL) )
                 parser.logger.log(Level.ALL, "Interface Body done parsing " + full_name());
+        }
+    }
+
+    /**
+     * Called by the parser when a pending ancestor of this interface has been
+     * defined. The body is parsed once all its pending ancestors are defined.
+     */
+    void ancestorDefined()
+    {
+        if( --pendingAncestors == 0 )
+        {
+            if( parser.logger.isLoggable(Level.ALL) )
+                parser.logger.log(Level.ALL, "Resuming deferred parse of " + full_name());
+
+            internal_parse();
+            parser.remove_pending( full_name() );
         }
     }
 
@@ -443,87 +460,4 @@ public class InterfaceBody
         visitor.visitInterfaceBody( this );
     }
 
-
-    static void clearParseThreads()
-    {
-       parseThreads.clear();
-    }
-
-
-    public class ParseThread extends Thread
-    {
-       private final InterfaceBody b;
-       private boolean running = false;
-
-       public ParseThread( InterfaceBody _b )
-       {
-          b = _b;
-          setDaemon( true );
-          parseThreads.addElement( this );
-          parser.incActiveParseThreads();
-          start();
-       }
-
-       public void run()
-       {
-          parser.set_pending( b.full_name(), b );
-          Object o = null;
-          for( Enumeration e = inheritance_spec.v.elements(); e.hasMoreElements(); )
-          {
-             waitingName = ( (ScopedName)( e.nextElement() ) ).resolvedName();
-             o = parser.get_pending( waitingName );
-             if( o != null )
-             {
-                try
-                {
-                   synchronized( o )
-                   {
-                      o.wait();
-                      running = true;
-                   }
-                }
-                catch( InterruptedException ie )
-                {
-                   parser.logger.log(Level.FINEST, "ParseThread " + this + " interrupted!");
-                }
-             }
-          }
-          b.internal_parse();
-
-          exitParseThread();
-       }
-
-       /**
-        * check whether this thread will eventually run
-        * @return true if the thread can run or is currently running
-        *         false if it is still blocked or has just returned from run()
-        */
-
-       public synchronized boolean isRunnable()
-       {
-          boolean result = running || checkWaitCondition();
-          if( parser.logger.isLoggable(Level.WARNING) )
-            parser.logger.log(Level.WARNING, "Thread is runnable: " + result);
-          return result;
-       }
-
-       private synchronized void exitParseThread()
-       {
-          parser.remove_pending( b.full_name() );
-          parser.decActiveParseThreads();
-          parseThreads.removeElement( this );
-          running = false;
-       }
-
-       /**
-        * @return  true, if waiting condition is true,
-        * i.e., if thread still needs to wait.
-        */
-
-       private boolean checkWaitCondition()
-       {
-          return ( parser.get_pending( waitingName ) == null );
-       }
-
-    }
 }

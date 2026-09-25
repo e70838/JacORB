@@ -29,8 +29,12 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.io.Writer;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.Hashtable;
+import java.util.List;
+import java.util.Map;
 import java.util.Stack;
 import java.util.Vector;
 import java.util.jar.Manifest;
@@ -120,8 +124,6 @@ parser code
 
     protected static String finalString = FINAL;
 
-    private static int activeParseThreads;
-
     public static Logger logger;
     public static Handler handler;
 
@@ -151,8 +153,7 @@ parser code
         generator = null;
         objectCachePlugin = null;
 
-        activeParseThreads = 0;
-        InterfaceBody.clearParseThreads ();
+        deferred_bodies.clear();
 
         out_dir = ".";
         package_prefix = null;
@@ -780,16 +781,21 @@ parser code
     }
 
 
-    // an interface inheriting from an forward declared interface
-    // needs to wait on an object until the ancestor has been parsed
-    // if get_pending returns null, the ancestor was not forward
-    // declared and thus has already been parsed
-
     // forward declared interfaces are put into this list
+    // if get_pending returns null, the name was not forward
+    // declared and thus has already been parsed
 
     static Hashtable pending_interfaces = new Hashtable();
 
-    public static synchronized void set_pending( String name, Object type )
+    // an interface body inheriting from a forward declared interface
+    // cannot be parsed before this ancestor has been defined, its
+    // parsing is deferred until remove_pending is called for the ancestor.
+    // Maps the name of the pending ancestor to the waiting bodies.
+
+    private static final Map<String, List<InterfaceBody>> deferred_bodies =
+        new HashMap<String, List<InterfaceBody>>();
+
+    public static void set_pending( String name, Object type )
     {
          // name will only be marked pending if it has not already been
          // parsed before and if is not already pending
@@ -856,45 +862,45 @@ parser code
         return objectCachePlugin != null;
     }
 
-    public static synchronized void remove_pending( String name )
+    public static void remove_pending( String name )
     {
          String use = ScopedName.unPseudoName (name);
-         Object o = pending_interfaces.remove(use);
-         if( o != null)
+         pending_interfaces.remove(use);
+
+         // resume the parsing of the interface bodies waiting for this
+         // definition. The list is detached from the map first, as parsing
+         // a body may in turn call remove_pending.
+         List<InterfaceBody> bodies = deferred_bodies.remove(use);
+         if( bodies != null )
          {
-             synchronized( o )
+             for( InterfaceBody body : bodies )
              {
-                  o.notifyAll();
+                 body.ancestorDefined();
              }
          }
-         if( pending_interfaces.size() == 0 )
+    }
+
+    /**
+     * Defer the parsing of an interface body until its ancestor, which is
+     * currently pending, has been defined. The body is notified through
+     * InterfaceBody.ancestorDefined when remove_pending is called for the
+     * ancestor.
+     */
+    static void defer_parse( String ancestor, InterfaceBody body )
+    {
+         String use = ScopedName.unPseudoName (ancestor);
+         List<InterfaceBody> bodies = deferred_bodies.get(use);
+         if( bodies == null )
          {
-             // notify the main thread that the parsing phase is complete
-             synchronized( pending_interfaces )
-             {
-                  pending_interfaces.notifyAll();
-             }
+             bodies = new ArrayList<InterfaceBody>();
+             deferred_bodies.put(use, bodies);
          }
+         bodies.add(body);
     }
 
     public static Object get_pending( String name )
     {
         return pending_interfaces.get (ScopedName.unPseudoName (name));
-    }
-
-    public static synchronized void decActiveParseThreads()
-    {
-        activeParseThreads--;
-    }
-
-    public static synchronized void incActiveParseThreads()
-    {
-        activeParseThreads++;
-    }
-
-    public static synchronized int activeParseThreads()
-    {
-        return activeParseThreads;
     }
 
     public static boolean generateIncluded()
@@ -1135,25 +1141,8 @@ specification ::=
                     throw new ParseException ("Lexer errors");
                 }
 
-                // if there are still interfaces to be parsed, wait until the
-                // threads performing this have finished. The last one
-                // will call notify() :)
-
-                if( parser.pending_interfaces.size() > 0  )
-                {
-                   // only block waiting if we know that there are active or
-                   // runnable threads and that there are still pending tasks
-                    final long timeout = 60000;
-                    long waitUntil = System.currentTimeMillis() + 20000;
-
-                    synchronized(parser.pending_interfaces)
-                    {
-                        while(parser.activeParseThreads() > 0 && parser.pending_interfaces.size() > 0 && System.currentTimeMillis() < waitUntil)
-                        {
-                            parser.pending_interfaces.wait(timeout);
-                        }
-                    }
-                }
+                // interfaces still pending here were forward declared but
+                // never defined, or inherit from such an interface
 
                 if( parser.pending_interfaces.size() > 0 &&
                     !parser.sloppy )
