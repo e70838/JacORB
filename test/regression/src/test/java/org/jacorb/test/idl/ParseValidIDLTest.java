@@ -178,4 +178,29 @@ public class ParseValidIDLTest extends AbstractIDLTestcase
         assertTrue ("".equals(f1.get(obj)));
         assertTrue ("".equals(f2.get(obj)));
     }
+
+    /**
+     * interfaces inheriting from forward declared interfaces are
+     * parsed once their ancestors are defined and inherit from all of them.
+     */
+    public void verify_forwardInheritance_idl(ClassLoader cl) throws Exception
+    {
+        assertInherits(cl, "PendingThenDefined", "A");
+        assertInherits(cl, "PendingThenDefined", "Base");
+        assertInherits(cl, "TwoPending", "A");
+        assertInherits(cl, "TwoPending", "B");
+        assertInherits(cl, "D", "C");
+        assertInherits(cl, "E", "D");
+        assertInherits(cl, "E", "C");
+
+        Class<?> clazz = cl.loadClass("forwardInheritance.TwoPendingOperations");
+        assertEquals(int.class, clazz.getMethod("get_a_long").getReturnType());
+    }
+
+    private static void assertInherits(ClassLoader cl, String derived, String base) throws Exception
+    {
+        Class<?> derivedClass = cl.loadClass("forwardInheritance." + derived);
+        Class<?> baseClass = cl.loadClass("forwardInheritance." + base);
+        assertTrue(derived + " should inherit from " + base, baseClass.isAssignableFrom(derivedClass));
+    }
 }

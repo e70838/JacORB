@@ -1,0 +1,55 @@
+// Interfaces inheriting from interfaces that are only forward declared
+// at that point. Their parsing is deferred until all their ancestors
+// have been defined.
+
+module forwardInheritance
+{
+    interface A;
+    interface B;
+    interface C;
+
+    interface Base
+    {
+        void base_op();
+    };
+
+    // a pending ancestor followed by an ancestor that is already defined
+    interface PendingThenDefined : A, Base
+    {
+        void pending_then_defined_op();
+    };
+
+    // two pending ancestors, using a type inherited from one of them
+    interface TwoPending : A, B
+    {
+        A_long get_a_long();
+    };
+
+    // chain: D waits for C, E waits for D
+    interface D : C
+    {
+        void d_op();
+    };
+
+    interface E : D
+    {
+        void e_op();
+    };
+
+    interface A
+    {
+        typedef long A_long;
+
+        void a_op();
+    };
+
+    interface B
+    {
+        void b_op();
+    };
+
+    interface C
+    {
+        void c_op();
+    };
+};
